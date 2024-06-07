@@ -48,7 +48,7 @@ impl <A, B> Data<A, B> {
 
 Currently the following aren't supported:
 - Types with non-type parameters i.e. const generics, lifetimes.
-- Tuples with are difficult to handle, see [examples/n-functor.rs](/examples/n-functor.rs) for how to format `#[map_with(...)]` for tuples.
+- Tuples with generics in their inner types are difficult to handle, see [examples/n-functor.rs](/examples/n-functor.rs) for how to format `#[map_with(...)]` for tuples.
 
 Other limitations:
 - Only a self-consuming map function is generated at this time. No `map_ref(&self, ...)`, for now. No promises though. This may be mutually exclusive with supporting lifetime parameters in the future.
