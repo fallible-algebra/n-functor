@@ -1,4 +1,4 @@
-# n-functor
+# n-functor ![](https://img.shields.io/crates/v/n-functor)
 
 You find yourself writing the same `map` function on 15 different recursing types with 6 type parameters. Time spent writing `map_all` for `MyData<A,B,C,D,E,F>` is time poorly spent. It should be more simple than this, surely some mode of derive? Ah, but rust's type system does not support higher-kinded types. This is a piece of information you know because of a misspent youth.
 
