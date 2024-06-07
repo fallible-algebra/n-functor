@@ -12,10 +12,10 @@ This is no matter, what you need right now is something to write a trivial to im
 #[derive(...)]
 // optional: setting a name for the type parameters, doesn't affect the structure
 // of the data in any way, just the variable names.
-#[derive_n_functor(B = second_type_param)]
 // We can also choose a different map name, the default being `map`.
 // This will recurse down to child elements without a custom `map_with` declaration.
 // #[derive_n_functor(map_name = different_map)]
+#[derive_n_functor(B = second_type_param)]
 struct Data<A, B> {
     a: A,
     // The map_with argument is an arbitrary expression.
