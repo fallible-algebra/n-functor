@@ -2,7 +2,7 @@
 name = "n-functor"
 version = "0.1.0"
 edition = "2021"
-licence = "MIT"
+license = "MIT"
 description = "Faux-derive a `map` function for types with one or more type parameters."
 keywords = ["functional programming", "map", "functor", "macro", "horror"]
 categories = ["rust-patterns"]
