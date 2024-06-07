@@ -39,7 +39,7 @@ impl <A, B> Data<A, B> {
 
 - Support for Structs and Enums, with both named and unnamed fields (including in enum variants).
 - Custom names for type parameters in the map function, through the form `#[derive_n_functor(T = name_for_t)]`.
-- Custom name for the implemented map function via `#[derive_n_functor(map_name = custom_map)].
+- Custom name for the implemented map function via `#[derive_n_functor(map_name = custom_map)]`.
 - Custom mapping for fields with non-trivial types, via the `#[map_with(...)]` attribute, where you can put in any function (including lambdas) to account for difficult cases.
 - Recursive calling on fields with applicable type parameters.
 - See examples for a terrible aftermath of my edge case testing (at time of writing, all those compile).
