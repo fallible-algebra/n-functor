@@ -1,0 +1,19 @@
+[package]
+name = "n-functor"
+version = "0.1.0"
+edition = "2021"
+licence = "MIT"
+description = "Faux-derive a `map` function for types with one or more type parameters."
+keywords = ["functional programming", "map", "functor", "macro", "horror"]
+categories = ["rust-patterns"]
+homepage = "https://github.com/fallible-algebra/n-functor"
+repository = "https://github.com/fallible-algebra/n-functor"
+readme = "README.md"
+
+[dependencies]
+proc-macro2 = "1.0.*"
+quote = { version = "1.0.*" }
+syn = { version = "2.0.*", features = ["full", "extra-traits"] }
+
+[lib]
+proc-macro = true
