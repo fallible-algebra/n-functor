@@ -14,7 +14,8 @@ use syn::{
 /// Generate a `map` function for a given type that maps across all its type parameters.
 /// i.e.
 /// ```
-/// #[derive(...)]
+/// use n_functor::derive_n_functor;
+/// #[derive(Debug, /* etc. */)]
 /// // optional: setting a name for the type parameters, doesn't affect the structure
 /// // of the data in any way, just the variable names.
 /// #[derive_n_functor(B = second_type_param)]
