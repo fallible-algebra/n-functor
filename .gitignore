@@ -14,3 +14,4 @@ Cargo.lock
 *.pdb
 # doing some LCIF/SCIP analysis in this repo.
 *.scip
+*.lsif

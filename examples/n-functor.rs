@@ -37,12 +37,15 @@ pub struct Two<A, B>(A, B);
 pub enum AyyBee<A, B> {
     One(A),
     Two(B),
-    Three { a: A, b: B },
+    Three {
+        a: A,
+        b: B,
+    },
     Four(A, B, A, B, A),
     Five,
     Six(
         #[map_with(|opt: Option<_>, ayy, bee| opt.map(|two: Two<A, B>| two.map(ayy, bee)))]
-        Option<Two<A, B>>
+        Option<Two<A, B>>,
     ),
 }
 
@@ -52,15 +55,16 @@ fn id<A>(a: A) -> A {
 
 // tuples are an issue because the macro doesn't expand them like unnamed structs / enums
 // and there would need to be a recursive destructuring of them to make sure tuples in tuples
-// work appropriately. Un/fortunately this is a side project to support other projects, 
+// work appropriately. Un/fortunately this is a side project to support other projects,
 // and time is not free, so I have yet to do that.
 #[derive_n_functor]
-pub struct TuplesAreDire<A, B>(
-    #[map_with(sorry_for_tuples)]
-    (A, B)
-);
+pub struct TuplesAreDire<A, B>(#[map_with(sorry_for_tuples)] (A, B));
 
-fn sorry_for_tuples<A, B, A2, B2>((a, b): (A, B), f_a: impl Fn(A) -> A2, f_b: impl Fn(B) -> B2) -> (A2, B2) {
+fn sorry_for_tuples<A, B, A2, B2>(
+    (a, b): (A, B),
+    f_a: impl Fn(A) -> A2,
+    f_b: impl Fn(B) -> B2,
+) -> (A2, B2) {
     (f_a(a), f_b(b))
 }
 

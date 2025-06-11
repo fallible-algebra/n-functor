@@ -1,14 +1,13 @@
-use std::collections::BTreeMap;
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{quote, quote_spanned, ToTokens};
+use std::collections::BTreeMap;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Attribute, Field,
-    Fields, GenericParam, Ident, Item, ItemEnum, ItemStruct, Meta, MetaList,
-    MetaNameValue, PathArguments, Token, Type, TypeParam, Variant,
+    parse_macro_input, Attribute, Field, Fields, GenericParam, Ident, Item, ItemEnum, ItemStruct,
+    Meta, MetaList, MetaNameValue, PathArguments, Token, Type, TypeParam, Variant,
 };
 
 /// Generate a `map` function for a given type that maps across all its type parameters.
@@ -34,10 +33,10 @@ use syn::{
 ///
 /// See examples and use `cargo-expand` to see how different code generates.
 ///
-/// Currently works with enums and structs. 
-/// 
+/// Currently works with enums and structs.
+///
 /// Caveats:
-/// - Does not work with data structures that have lifetimes or constants in them at this time. 
+/// - Does not work with data structures that have lifetimes or constants in them at this time.
 /// - Does not currently work well with i.e. tuples where one of the types within is a type parameter. if you need to deal with this, write an external function that applies the mappings (see examples.)
 #[proc_macro_attribute]
 pub fn derive_n_functor(args: TokenStream, item: TokenStream) -> TokenStream {
@@ -84,9 +83,9 @@ impl Args {
                         mapping_name = path.path.segments.last()?.ident.to_string();
                     }
                     // return none as we've consumed this input.
-                    return None
+                    return None;
                 }
-                // continue to processing 
+                // continue to processing
                 let ty_ident = &name_val.path.segments.last()?.ident;
                 let rename_ident = &match &name_val.value {
                     syn::Expr::Path(path) => path.path.segments.last(),
@@ -96,7 +95,10 @@ impl Args {
                 Some((ty_ident.clone(), rename_ident.clone()))
             })
             .collect();
-        Self { parameter_names, mapping_name }
+        Self {
+            parameter_names,
+            mapping_name,
+        }
     }
 
     fn get_suffix_for(&self, ident: &Ident) -> Ident {
@@ -172,7 +174,7 @@ impl AbstractFunctorFactory {
         let implemented: Punctuated<TokenStream2, Token![,]> = source
             .variants
             .iter_mut()
-            .map(|variant| factory.implement_body_for_variant(variant))
+            .map(|variant| factory.implement_body_for_variant(variant, false))
             .collect();
         quote! {
             impl #impl_gen #name #type_gen #where_clause {
@@ -193,12 +195,17 @@ impl AbstractFunctorFactory {
             source.ident.clone(),
         );
         let map_name = factory.args.get_map_all_name();
+        let map_res_name = Ident::new(&format!("{}_res", map_name), Span::call_site());
         let (impl_gen, type_gen, where_clause) = source.generics.split_for_impl();
         let mapped_params: Punctuated<TypeParam, Token![,]> = factory
             .type_maps_to_type
             .iter()
             .map(|a| TypeParam::from(a.1.clone()))
             .collect();
+        let map_res_error_ident = Ident::new("E_", Span::call_site());
+        let fn_args_for_map_res = factory.make_fn_arguments_map_res(map_res_error_ident.clone());
+        let mut mapped_params_for_map_res = mapped_params.clone();
+        mapped_params_for_map_res.push(map_res_error_ident.clone().into());
         let fn_args = factory.make_fn_arguments();
         let (fields, names_for_unnamed) = Self::unpack_fields(&source.fields);
         let expanded = match source.fields {
@@ -206,33 +213,52 @@ impl AbstractFunctorFactory {
             Fields::Unnamed(_) => quote! {#name(#fields)},
             Fields::Unit => quote! {#name},
         };
-        let implemented =
-            factory.apply_mapping_to_fields(&mut source.fields, name.clone(), names_for_unnamed);
+        let mut source_2 = source.fields.clone();
+        let implemented = factory.apply_mapping_to_fields(
+            &mut source.fields,
+            name.clone(),
+            names_for_unnamed.clone(),
+            false,
+        );
+        let implemented_map_res =
+            factory.apply_mapping_to_fields(&mut source_2, name.clone(), names_for_unnamed, true);
         quote! {
             impl #impl_gen #name #type_gen #where_clause {
                 pub fn #map_name<#mapped_params>(self, #fn_args) -> #name<#mapped_params> {
                     let #expanded = self;
                     #implemented
                 }
+                pub fn #map_res_name<#mapped_params_for_map_res>(self, #fn_args_for_map_res) -> Result<#name<#mapped_params>, #map_res_error_ident> {
+                    let #expanded = self;
+                    Ok({#implemented_map_res})
+                }
             }
         }
     }
 
-    fn implement_body_for_variant(&self, variant: &mut Variant) -> TokenStream2 {
+    fn implement_body_for_variant(&self, variant: &mut Variant, is_map_res: bool) -> TokenStream2 {
         let type_name = &self.type_name;
         let name = &variant.ident;
         let (unpacked, name_mapping) = Self::unpack_fields(&variant.fields);
         match variant.fields {
             Fields::Named(_) => {
-                let implemented =
-                    self.apply_mapping_to_fields(&mut variant.fields, name.clone(), name_mapping);
+                let implemented = self.apply_mapping_to_fields(
+                    &mut variant.fields,
+                    name.clone(),
+                    name_mapping,
+                    is_map_res,
+                );
                 quote! {
                     #type_name::#name{#unpacked} => #type_name::#implemented
                 }
             }
             Fields::Unnamed(_) => {
-                let implemented =
-                    self.apply_mapping_to_fields(&mut variant.fields, name.clone(), name_mapping);
+                let implemented = self.apply_mapping_to_fields(
+                    &mut variant.fields,
+                    name.clone(),
+                    name_mapping,
+                    is_map_res,
+                );
                 quote! {
                     #type_name::#name(#unpacked) => #type_name::#implemented
                 }
@@ -291,7 +317,9 @@ impl AbstractFunctorFactory {
                     }
                 }
                 // this needs to be out of the last check otherwise we don't properly recurse on non-type-params.
-                if let Some(PathArguments::AngleBracketed(generics)) = &path.path.segments.last().map(|segment| &segment.arguments) {
+                if let Some(PathArguments::AngleBracketed(generics)) =
+                    &path.path.segments.last().map(|segment| &segment.arguments)
+                {
                     for generic in &generics.args {
                         if let syn::GenericArgument::Type(ty) = generic {
                             self.recursive_get_generics_of_type_to_buffer(ty, buffer)
@@ -342,7 +370,13 @@ impl AbstractFunctorFactory {
         fields: &mut Fields,
         name: Ident,
         names_for_unnamed: FieldNameMapping,
+        is_map_res: bool,
     ) -> TokenStream2 {
+        let postfix = if is_map_res {
+            quote! {?}
+        } else {
+            quote! {}
+        };
         match fields {
             Fields::Named(named) => {
                 let mapped: Punctuated<TokenStream2, Token![,]> = named
@@ -354,7 +388,7 @@ impl AbstractFunctorFactory {
                         let new_field_content =
                             self.apply_mapping_to_field_ref(field, quote! {#field_name});
                         quote! {
-                            #field_name: #new_field_content
+                            #field_name: #new_field_content #postfix
                         }
                     })
                     .collect();
@@ -376,7 +410,7 @@ impl AbstractFunctorFactory {
                         let field_ref = quote! {#name_of_field};
                         let new_field_content = self.apply_mapping_to_field_ref(field, field_ref);
                         quote! {
-                            #new_field_content
+                            #new_field_content #postfix
                         }
                     })
                     .collect();
@@ -441,6 +475,22 @@ impl AbstractFunctorFactory {
                 // don't need to trailing comma this cos the punctuated type does that for us.
                 quote! {
                     #fn_name: impl Fn(#from) -> #to
+                }
+            })
+            .collect();
+        mapped.into_token_stream()
+    }
+
+    fn make_fn_arguments_map_res(&self, err_ident: Ident) -> TokenStream2 {
+        let mapped: Punctuated<TokenStream2, Token![,]> = self
+            .type_maps_to_type
+            .iter()
+            .map(|(from, to)| {
+                let fn_name = self.args.get_whole_map_name(from);
+                // it's this or TypedPat / PatTyped
+                // don't need to trailing comma this cos the punctuated type does that for us.
+                quote! {
+                    #fn_name: impl Fn(#from) -> Result<#to, #err_ident>
                 }
             })
             .collect();
