@@ -43,6 +43,7 @@ impl <A, B> Data<A, B> {
 - Custom mapping for fields with non-trivial types, via the `#[map_with(...)]` attribute, where you can put in any function (including lambdas) to account for difficult cases.
 - Recursive calling on fields with applicable type parameters.
 - See examples for a terrible aftermath of my edge case testing (at time of writing, all those compile).
+- Support for short-circuiting on mapping with functions that return results with `#[derive_n_functor(impl_map_res = true)]`.
 
 ## Limitations
 
