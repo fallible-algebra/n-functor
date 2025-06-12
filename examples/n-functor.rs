@@ -58,7 +58,7 @@ fn id<A>(a: A) -> A {
 // work appropriately. Un/fortunately this is a side project to support other projects,
 // and time is not free, so I have yet to do that.
 #[derive_n_functor]
-pub struct TuplesAreDire<A, B>(#[map_with(sorry_for_tuples)] (A, B));
+pub struct TuplesAreDire<A, B>(#[map_with(sorry_for_tuples, sorry_for_tuples_map_res)] (A, B));
 
 fn sorry_for_tuples<A, B, A2, B2>(
     (a, b): (A, B),
@@ -68,16 +68,47 @@ fn sorry_for_tuples<A, B, A2, B2>(
     (f_a(a), f_b(b))
 }
 
+fn sorry_for_tuples_map_res<A, B, A2, B2, E>(
+    (a, b): (A, B),
+    f_a: impl Fn(A) -> Result<A2, E>,
+    f_b: impl Fn(B) -> Result<B2, E>,
+) -> Result<(A2, B2), E> {
+    Ok((f_a(a)?, f_b(b)?))
+}
+
 #[derive_n_functor]
 pub struct Recursion<A, B> {
     moi: A,
     #[map_with(|list: [A; 5], a| list.into_iter().map(a).collect::<Vec<_>>().try_into().unwrap_or_else(|_| unimplemented!()))]
     x: [A; 5],
     a_b: AyyBee<A, B>,
-    #[map_with(Option::map)]
+    #[map_with(Option::map, map_res_for_option)]
     opt: Option<A>,
-    #[map_with(|opt: Option<_>, f| opt.map(|opt: Option<_>| opt.map(f)))]
+    #[map_with(|opt: Option<_>, f| opt.map(|opt: Option<_>| opt.map(f)), Self::map_res_for_option_option)]
     opt2: Option<Option<B>>,
+}
+
+fn map_res_for_option<A, A2, E>(
+    opt: Option<A>,
+    f: impl Fn(A) -> Result<A2, E>,
+) -> Result<Option<A2>, E> {
+    match opt {
+        Some(value) => Ok(Some(f(value)?)),
+        None => Ok(None),
+    }
+}
+
+impl<A, B> Recursion<A, B> {
+    fn map_res_for_option_option<B2, E>(
+        opt: Option<Option<B>>,
+        f: impl Fn(B) -> Result<B2, E>,
+    ) -> Result<Option<Option<B2>>, E> {
+        match opt {
+            Some(Some(inner)) => Ok(Some(Some(f(inner)?))),
+            // unreachable because the inner is already reached in the above case
+            lacks_inner => Ok(lacks_inner.map(|opt| opt.map(|_| unreachable!()))),
+        }
+    }
 }
 
 #[derive_n_functor]

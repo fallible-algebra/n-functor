@@ -1,22 +1,27 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{ToTokens, quote, quote_spanned};
 use std::collections::BTreeMap;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
+use syn::parse::{self, Parser};
+use syn::punctuated::{self, Punctuated};
 use syn::spanned::Spanned;
+use syn::token::{Comma, Pub};
 use syn::{
-    parse_macro_input, Attribute, Field, Fields, GenericParam, Ident, Item, ItemEnum, ItemStruct,
-    Meta, MetaList, MetaNameValue, PathArguments, Token, Type, TypeParam, Variant,
+    Attribute, Expr, Field, Fields, GenericParam, Ident, Item, ItemEnum, ItemStruct, Meta,
+    MetaList, MetaNameValue, PathArguments, PathSegment, Token, Type, TypeParam, Variant,
+    Visibility, parse_macro_input,
 };
 
 /// Generate a `map` function for a given type that maps across all its type parameters.
 /// i.e.
 /// ```
 /// use n_functor::derive_n_functor;
+///
 /// #[derive(Debug, /* etc. */)]
 /// // optional: setting a name for the type parameters, doesn't affect the structure
-/// // of the data in any way, just the variable names.
+/// // of the data in any way, just the values of type params. In this instance this
+/// // will generate a mapping function of the form:
+/// // `Data::map(self, map_a: impl Fn(A) -> A2, map_second_type_param: impl B -> B2) -> Data<A2, B2>`.
 /// #[derive_n_functor(B = second_type_param)]
 /// // We can also choose a different map name, the default being `map`.
 /// // This will recurse down to child elements without a custom `map_with` declaration.
@@ -27,9 +32,53 @@ use syn::{
 ///     #[map_with(Option::map)]
 ///     b: Option<B>
 /// }
-/// ```
 ///
-/// Will generate a mapping function of the form: `Data::map(self, map_a: impl Fn(A) -> A2, map_second_type_param: impl B -> B2) -> Data<A2, B2>`.
+/// // This one shows off "map_res" which lets you do structure-wide functor-style maps
+/// // but short circuit on functions that return an error.
+/// #[derive_n_functor(impl_map_res = true)]
+/// struct HasMapResult<A> {
+///     inner: A,
+///     // Arbitrary expressions / closures can go in here, but for map_res it can get
+///     // too complex for a closure.
+///     #[map_with(Option::map, map_res_for_option)]
+///     inner_opt: Option<A>,
+/// }
+///
+/// fn map_res_for_option<A, A2, E>(
+///     opt: Option<A>,
+///     f: impl Fn(A) -> Result<A2, E>
+/// ) -> Result<Option<A2>, E> {
+///    match opt {
+///        Some(value) => Ok(Some(f(value)?)),
+///        None => Ok(None),
+///    }
+///}
+/// ```
+/// ## Macro configuration
+///
+/// - `A = a_better_name_for_this_type_parameter`
+///     - `fn map(self, map_N)` can be informative, but `fn map(self, map_numbers)` is more explicit and autocompletes better.  
+///     - This option lets you rename the in-function variables for the map method, making it easier for you and other programmers to know what's actually being mapped.
+/// - `map_name = ..`
+///     - Lets you change the name of the method for the mapping function.
+///     - Also uses this name to recurse down on mappable types.
+/// Macro attribute arguments:
+/// - `impl_map_res = true`
+///     - An option to implement an additional "traverse" style mapping function that, given a type `MyType<A, ..>` and a bunch of mapping functions `f: A -> Result<B, E>, ..` will give you back `Result<MyType<B, ..> E>`
+///     - Useful for when you want to apply function that returns result to a structure but short-circuit with an error.
+///     - If you want all of the errors from this kind of operation, you'll need to implement that yourself still.
+///     - The map_with attribute can be fed alternative "map_res" functions for your types as a second parameter.
+/// - `map_res_suffix = result_is_a_better_suffix`:
+///     - Changes the suffix for the `map_res` style method from the default (`res`, which with the default map name would create `map_res`) to one of your choice.
+///     - Useful if your crate would prefer to have this method called `map_result`, or `endofunctor_traversable` if you named the map method `endofunctor` and changed the suffix to `traversable`.
+///
+/// ### `#[map_with(..)]`
+///
+/// The `map_with` attribute lets you set functions to call when performing functor maps on types that aren't just the "raw" types in the type parameter. For example, if you have a struct `MyData<A> {field: AnotherCratesType<A>}` you'll need to provide a mapping function, unless that type implements a self-consuming "map(self, f: Fn A -> B)" function already.
+///
+/// This attribute takes an expression, so it can be a closure or the name of a function in scope.
+///
+/// ## Details and Limitations
 ///
 /// See examples and use `cargo-expand` to see how different code generates.
 ///
@@ -38,6 +87,7 @@ use syn::{
 /// Caveats:
 /// - Does not work with data structures that have lifetimes or constants in them at this time.
 /// - Does not currently work well with i.e. tuples where one of the types within is a type parameter. if you need to deal with this, write an external function that applies the mappings (see examples.)
+/// - Does not support custom visibility for generated methods. Always pub, at the moment.
 #[proc_macro_attribute]
 pub fn derive_n_functor(args: TokenStream, item: TokenStream) -> TokenStream {
     let _args: TokenStream2 = args.clone().into();
@@ -58,11 +108,13 @@ pub fn derive_n_functor(args: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
+/// The consumer for the proc macro attribute arguments.
+#[derive(Clone)]
 struct Args {
     pub parameter_names: BTreeMap<Ident, Ident>,
     pub mapping_name: String,
-    // Alternative functions for mapping for specific fields.
-    // pub alt_functions: BTreeMap<Ident, TokenStream>,
+    pub should_generate_map_res: bool,
+    pub map_res_suffix: String,
 }
 
 impl Args {
@@ -75,6 +127,8 @@ impl Args {
     fn from_iter(input: impl Iterator<Item = MetaNameValue>) -> Self {
         let search_for_mapping_token = Ident::new("map_name", Span::call_site());
         let mut mapping_name = "map".to_string();
+        let mut should_generate_map_res = false;
+        let mut map_res_suffix = "res".to_string();
         let parameter_names = input
             .filter_map(|name_val| {
                 if name_val.path.segments.last().unwrap().ident == search_for_mapping_token {
@@ -83,6 +137,19 @@ impl Args {
                         mapping_name = path.path.segments.last()?.ident.to_string();
                     }
                     // return none as we've consumed this input.
+                    return None;
+                }
+                if name_val.path.segments.len() == 1
+                    && name_val.path.segments.get(0).unwrap().ident == "impl_map_res"
+                {
+                    should_generate_map_res =
+                        name_val.value.to_token_stream().to_string() == "true";
+                    return None;
+                }
+                if name_val.path.segments.len() == 1
+                    && name_val.path.segments.get(0).unwrap().ident == "map_res_suffix"
+                {
+                    map_res_suffix = name_val.value.to_token_stream().to_string();
                     return None;
                 }
                 // continue to processing
@@ -98,6 +165,8 @@ impl Args {
         Self {
             parameter_names,
             mapping_name,
+            should_generate_map_res,
+            map_res_suffix,
         }
     }
 
@@ -125,6 +194,8 @@ enum FieldMapping {
 
 type FieldNameMapping = Option<Vec<Ident>>;
 
+/// The data type that holds onto the arguments to the macro and the immediately relevant information
+/// needed for creating an n-functor implementation.
 struct AbstractFunctorFactory {
     pub args: Args,
     // this is a vec for reasons of preserving order of type parameters.
@@ -190,12 +261,20 @@ impl AbstractFunctorFactory {
     fn from_item_struct(args: Args, source: &mut ItemStruct) -> TokenStream2 {
         let name = source.ident.clone();
         let factory = AbstractFunctorFactory::from_generics(
-            args,
+            args.clone(),
             source.generics.params.iter(),
             source.ident.clone(),
         );
+        let Args {
+            should_generate_map_res,
+            map_res_suffix,
+            ..
+        } = args;
         let map_name = factory.args.get_map_all_name();
-        let map_res_name = Ident::new(&format!("{}_res", map_name), Span::call_site());
+        let map_res_name = Ident::new(
+            &format!("{}_{}", map_name, map_res_suffix),
+            Span::call_site(),
+        );
         let (impl_gen, type_gen, where_clause) = source.generics.split_for_impl();
         let mapped_params: Punctuated<TypeParam, Token![,]> = factory
             .type_maps_to_type
@@ -222,16 +301,23 @@ impl AbstractFunctorFactory {
         );
         let implemented_map_res =
             factory.apply_mapping_to_fields(&mut source_2, name.clone(), names_for_unnamed, true);
+        let map_res_impl = if should_generate_map_res {
+            quote! {
+                pub fn #map_res_name<#mapped_params_for_map_res>(self, #fn_args_for_map_res) -> Result<#name<#mapped_params>, #map_res_error_ident> {
+                    let #expanded = self;
+                    Ok({#implemented_map_res})
+                }
+            }
+        } else {
+            quote! {}
+        };
         quote! {
             impl #impl_gen #name #type_gen #where_clause {
                 pub fn #map_name<#mapped_params>(self, #fn_args) -> #name<#mapped_params> {
                     let #expanded = self;
                     #implemented
                 }
-                pub fn #map_res_name<#mapped_params_for_map_res>(self, #fn_args_for_map_res) -> Result<#name<#mapped_params>, #map_res_error_ident> {
-                    let #expanded = self;
-                    Ok({#implemented_map_res})
-                }
+                #map_res_impl
             }
         }
     }
@@ -278,7 +364,7 @@ impl AbstractFunctorFactory {
                 && self
                     .type_maps_to_type
                     .iter()
-                    .any(|(gen, _)| *gen == last_segment.unwrap().ident)
+                    .any(|(generic, _)| *generic == last_segment.unwrap().ident)
             {
                 // the type is a path with 1 segment whose identifier matches a type parameter, so it's a trivial case.
                 return Some(FieldMapping::Trivial(last_segment.unwrap().ident.clone()));
@@ -303,7 +389,7 @@ impl AbstractFunctorFactory {
                 if let Some(segment) = path.path.segments.last().filter(|segment| {
                     self.type_maps_to_type
                         .iter()
-                        .any(|(gen, _)| segment.ident == *gen)
+                        .any(|(generic, _)| segment.ident == *generic)
                 }) {
                     if !buffer.contains(&segment.ident) {
                         buffer.push(segment.ident.clone());
@@ -372,11 +458,6 @@ impl AbstractFunctorFactory {
         names_for_unnamed: FieldNameMapping,
         is_map_res: bool,
     ) -> TokenStream2 {
-        let postfix = if is_map_res {
-            quote! {?}
-        } else {
-            quote! {}
-        };
         match fields {
             Fields::Named(named) => {
                 let mapped: Punctuated<TokenStream2, Token![,]> = named
@@ -385,10 +466,13 @@ impl AbstractFunctorFactory {
                     .map(|field| {
                         // we can unwrap as it's a named field.
                         let field_name = field.ident.clone().unwrap();
-                        let new_field_content =
-                            self.apply_mapping_to_field_ref(field, quote! {#field_name});
+                        let new_field_content = self.apply_mapping_to_field_ref(
+                            field,
+                            quote! {#field_name},
+                            is_map_res,
+                        );
                         quote! {
-                            #field_name: #new_field_content #postfix
+                            #field_name: #new_field_content
                         }
                     })
                     .collect();
@@ -408,9 +492,10 @@ impl AbstractFunctorFactory {
                     .map(|(field_num, field)| {
                         let name_of_field = &names[field_num];
                         let field_ref = quote! {#name_of_field};
-                        let new_field_content = self.apply_mapping_to_field_ref(field, field_ref);
+                        let new_field_content =
+                            self.apply_mapping_to_field_ref(field, field_ref, is_map_res);
                         quote! {
-                            #new_field_content #postfix
+                            #new_field_content
                         }
                     })
                     .collect();
@@ -426,13 +511,19 @@ impl AbstractFunctorFactory {
         &self,
         field: &mut Field,
         field_ref: TokenStream2,
+        is_map_res: bool,
     ) -> TokenStream2 {
+        let postfix = if is_map_res {
+            quote! {?}
+        } else {
+            quote! {}
+        };
         match self.get_mappable_generics_of_type(&field.ty) {
             Some(mapping) => match mapping {
                 FieldMapping::Trivial(type_to_map) => {
                     let map = self.args.get_whole_map_name(&type_to_map);
                     quote! {
-                        #map(#field_ref)
+                        #map(#field_ref)#postfix
                     }
                 }
                 // attempt recursion on the type.
@@ -446,15 +537,23 @@ impl AbstractFunctorFactory {
                         })
                         .collect();
                     match FieldArg::find_in_attributes(field.attrs.iter()) {
-                        Some(FieldArg { alt_function }) => {
+                        Some(FieldArg {
+                            alt_function,
+                            map_res_with_function,
+                        }) => {
+                            let function_to_use = if is_map_res && map_res_with_function.is_some() {
+                                map_res_with_function.clone().unwrap()
+                            } else {
+                                alt_function
+                            };
                             FieldArg::remove_from_attributes(&mut field.attrs);
                             quote! {
-                                (#alt_function)(#field_ref, #all_fns)
+                                (#function_to_use)(#field_ref, #all_fns)#postfix
                             }
                         }
                         None => {
                             quote! {
-                                #field_ref.#map_all_name(#all_fns)
+                                #field_ref.#map_all_name(#all_fns)#postfix
                             }
                         }
                     }
@@ -500,6 +599,7 @@ impl AbstractFunctorFactory {
 
 struct FieldArg {
     pub alt_function: TokenStream2,
+    pub map_res_with_function: Option<TokenStream2>,
 }
 
 impl FieldArg {
@@ -538,16 +638,27 @@ impl FieldArg {
 
     fn from_meta_list(meta: &MetaList) -> Option<Self> {
         let ident_to_check = Self::map_with_attr_ident();
-        if meta.path.segments.iter().last().map(|x| &x.ident) == Some(&ident_to_check) {
-            Some(Self {
-                alt_function: meta.tokens.clone(),
-            })
+        if meta.path.segments.iter().next_back().map(|x| &x.ident) == Some(&ident_to_check) {
+            // let parser = Punctuated::parse_terminated.;
+            let punctuated: Punctuated<Expr, Token![,]> = Punctuated::parse_terminated
+                .parse2(meta.tokens.clone())
+                .unwrap();
+            match punctuated.len() {
+                1 => Some(Self {
+                    alt_function: punctuated[0].to_token_stream(),
+                    map_res_with_function: None,
+                }),
+                2 => Some(Self {
+                    alt_function: punctuated[0].to_token_stream(),
+                    map_res_with_function: Some(punctuated[1].to_token_stream()),
+                }),
+                _ => Some(Self {
+                    alt_function: quote! {compile_error!("Wrong number of arguments passed to map_with, this takes up to 2 arguments: one for regular mapping, and one for the 'map_res' function.")},
+                    map_res_with_function: None,
+                }),
+            }
         } else {
             None
         }
     }
 }
-// #[proc_macro_attribute]
-// pub fn derive_n_foldable(attr: TokenStream, item: TokenStream) -> TokenStream {
-//     unimplemented!()
-// }
