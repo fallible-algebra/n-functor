@@ -1,3 +1,80 @@
+//! Generate a `map` function for a given type that maps across all its type parameters.
+//! i.e.
+//! ```
+//! use n_functor::derive_n_functor;
+//!
+//! #[derive(Debug, /* etc. */)]
+//! // optional: setting a name for the type parameters, doesn't affect the structure
+//! // of the data in any way, just the values of type params. In this instance this
+//! // will generate a mapping function of the form:
+//! // `Data::map(self, map_a: impl Fn(A) -> A2, map_second_type_param: impl B -> B2) -> Data<A2, B2>`.
+//! #[derive_n_functor(B = second_type_param)]
+//! // We can also choose a different map name, the default being `map`.
+//! // This will recurse down to child elements without a custom `map_with` declaration.
+//! // #[derive_n_functor(map_name = different_map)]
+//! struct Data<A, B> {
+//!     a: A,
+//!     // The map_with argument is an arbitrary expression.
+//!     #[map_with(Option::map)]
+//!     b: Option<B>
+//! }
+//!
+//! // This one shows off "map_res" which lets you do structure-wide functor-style maps
+//! // but short circuit on functions that return an error.
+//! #[derive_n_functor(impl_map_res = true)]
+//! struct HasMapResult<A> {
+//!     inner: A,
+//!     // Arbitrary expressions / closures can go in here, but for map_res it can get
+//!     // too complex for a closure.
+//!     #[map_with(Option::map, map_res_for_option)]
+//!     inner_opt: Option<A>,
+//! }
+//!
+//! fn map_res_for_option<A, A2, E>(
+//!     opt: Option<A>,
+//!     f: impl Fn(A) -> Result<A2, E>
+//! ) -> Result<Option<A2>, E> {
+//!    match opt {
+//!        Some(value) => Ok(Some(f(value)?)),
+//!        None => Ok(None),
+//!    }
+//!}
+//! ```
+//! ## Macro configuration
+//!
+//! Macro attribute arguments:
+//! - `A = a_better_name_for_this_type_parameter`
+//!     - `fn map(self, map_N)` can be informative, but `fn map(self, map_numbers)` is more explicit and autocompletes better.  
+//!     - This option lets you rename the in-function variables for the map method, making it easier for you and other programmers to know what's actually being mapped.
+//! - `map_name = ..`
+//!     - Lets you change the name of the method for the mapping function.
+//!     - Also uses this name to recurse down on mappable types.
+//! - `impl_map_res = true`
+//!     - An option to implement an additional "traverse" style mapping function that, given a type `MyType<A, ..>` and a bunch of mapping functions `f: A -> Result<B, E>, ..` will give you back `Result<MyType<B, ..> E>`
+//!     - Useful for when you want to apply function that returns result to a structure but short-circuit with an error.
+//!     - If you want all of the errors from this kind of operation, you'll need to implement that yourself still.
+//!     - The map_with attribute can be fed alternative "map_res" functions for your types as a second parameter.
+//! - `map_res_suffix = result_is_a_better_suffix`:
+//!     - Changes the suffix for the `map_res` style method from the default (`res`, which with the default map name would create `map_res`) to one of your choice.
+//!     - Useful if your crate would prefer to have this method called `map_result`, or `endofunctor_traversable` if you named the map method `endofunctor` and changed the suffix to `traversable`.
+//!
+//! ### `#[map_with(..)]`
+//!
+//! The `map_with` attribute lets you set functions to call when performing functor maps on types that aren't just the "raw" types in the type parameter. For example, if you have a struct `MyData<A> {field: AnotherCratesType<A>}` you'll need to provide a mapping function, unless that type implements a self-consuming "map(self, f: Fn A -> B)" function already.
+//!
+//! This attribute takes an expression, so it can be a closure or the name of a function in scope.
+//!
+//! ## Details and Limitations
+//!
+//! See examples and use `cargo-expand` to see how different code generates.
+//!
+//! Currently works with enums and structs.
+//!
+//! Caveats:
+//! - Does not work with data structures that have lifetimes or constants in them at this time.
+//! - Does not currently work well with i.e. tuples where one of the types within is a type parameter. if you need to deal with this, write an external function that applies the mappings (see examples.)
+//! - Does not support custom visibility for generated methods. Always pub, at the moment.
+
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{ToTokens, quote, quote_spanned};
@@ -10,82 +87,7 @@ use syn::{
     MetaList, MetaNameValue, PathArguments, Token, Type, TypeParam, Variant, parse_macro_input,
 };
 
-/// Generate a `map` function for a given type that maps across all its type parameters.
-/// i.e.
-/// ```
-/// use n_functor::derive_n_functor;
-///
-/// #[derive(Debug, /* etc. */)]
-/// // optional: setting a name for the type parameters, doesn't affect the structure
-/// // of the data in any way, just the values of type params. In this instance this
-/// // will generate a mapping function of the form:
-/// // `Data::map(self, map_a: impl Fn(A) -> A2, map_second_type_param: impl B -> B2) -> Data<A2, B2>`.
-/// #[derive_n_functor(B = second_type_param)]
-/// // We can also choose a different map name, the default being `map`.
-/// // This will recurse down to child elements without a custom `map_with` declaration.
-/// // #[derive_n_functor(map_name = different_map)]
-/// struct Data<A, B> {
-///     a: A,
-///     // The map_with argument is an arbitrary expression.
-///     #[map_with(Option::map)]
-///     b: Option<B>
-/// }
-///
-/// // This one shows off "map_res" which lets you do structure-wide functor-style maps
-/// // but short circuit on functions that return an error.
-/// #[derive_n_functor(impl_map_res = true)]
-/// struct HasMapResult<A> {
-///     inner: A,
-///     // Arbitrary expressions / closures can go in here, but for map_res it can get
-///     // too complex for a closure.
-///     #[map_with(Option::map, map_res_for_option)]
-///     inner_opt: Option<A>,
-/// }
-///
-/// fn map_res_for_option<A, A2, E>(
-///     opt: Option<A>,
-///     f: impl Fn(A) -> Result<A2, E>
-/// ) -> Result<Option<A2>, E> {
-///    match opt {
-///        Some(value) => Ok(Some(f(value)?)),
-///        None => Ok(None),
-///    }
-///}
-/// ```
-/// ## Macro configuration
-///
-/// Macro attribute arguments:
-/// - `A = a_better_name_for_this_type_parameter`
-///     - `fn map(self, map_N)` can be informative, but `fn map(self, map_numbers)` is more explicit and autocompletes better.  
-///     - This option lets you rename the in-function variables for the map method, making it easier for you and other programmers to know what's actually being mapped.
-/// - `map_name = ..`
-///     - Lets you change the name of the method for the mapping function.
-///     - Also uses this name to recurse down on mappable types.
-/// - `impl_map_res = true`
-///     - An option to implement an additional "traverse" style mapping function that, given a type `MyType<A, ..>` and a bunch of mapping functions `f: A -> Result<B, E>, ..` will give you back `Result<MyType<B, ..> E>`
-///     - Useful for when you want to apply function that returns result to a structure but short-circuit with an error.
-///     - If you want all of the errors from this kind of operation, you'll need to implement that yourself still.
-///     - The map_with attribute can be fed alternative "map_res" functions for your types as a second parameter.
-/// - `map_res_suffix = result_is_a_better_suffix`:
-///     - Changes the suffix for the `map_res` style method from the default (`res`, which with the default map name would create `map_res`) to one of your choice.
-///     - Useful if your crate would prefer to have this method called `map_result`, or `endofunctor_traversable` if you named the map method `endofunctor` and changed the suffix to `traversable`.
-///
-/// ### `#[map_with(..)]`
-///
-/// The `map_with` attribute lets you set functions to call when performing functor maps on types that aren't just the "raw" types in the type parameter. For example, if you have a struct `MyData<A> {field: AnotherCratesType<A>}` you'll need to provide a mapping function, unless that type implements a self-consuming "map(self, f: Fn A -> B)" function already.
-///
-/// This attribute takes an expression, so it can be a closure or the name of a function in scope.
-///
-/// ## Details and Limitations
-///
-/// See examples and use `cargo-expand` to see how different code generates.
-///
-/// Currently works with enums and structs.
-///
-/// Caveats:
-/// - Does not work with data structures that have lifetimes or constants in them at this time.
-/// - Does not currently work well with i.e. tuples where one of the types within is a type parameter. if you need to deal with this, write an external function that applies the mappings (see examples.)
-/// - Does not support custom visibility for generated methods. Always pub, at the moment.
+/// The main macro of this crate. See the main page of the docs for an explanation of use, or check the examples.
 #[proc_macro_attribute]
 pub fn derive_n_functor(args: TokenStream, item: TokenStream) -> TokenStream {
     let _args: TokenStream2 = args.clone().into();
