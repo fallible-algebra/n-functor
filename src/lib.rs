@@ -54,13 +54,13 @@ use syn::{
 /// ```
 /// ## Macro configuration
 ///
+/// Macro attribute arguments:
 /// - `A = a_better_name_for_this_type_parameter`
 ///     - `fn map(self, map_N)` can be informative, but `fn map(self, map_numbers)` is more explicit and autocompletes better.  
 ///     - This option lets you rename the in-function variables for the map method, making it easier for you and other programmers to know what's actually being mapped.
 /// - `map_name = ..`
 ///     - Lets you change the name of the method for the mapping function.
 ///     - Also uses this name to recurse down on mappable types.
-/// Macro attribute arguments:
 /// - `impl_map_res = true`
 ///     - An option to implement an additional "traverse" style mapping function that, given a type `MyType<A, ..>` and a bunch of mapping functions `f: A -> Result<B, E>, ..` will give you back `Result<MyType<B, ..> E>`
 ///     - Useful for when you want to apply function that returns result to a structure but short-circuit with an error.
