@@ -77,14 +77,14 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{ToTokens, quote, quote_spanned};
+use quote::{quote, quote_spanned, ToTokens};
 use std::collections::BTreeMap;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
-    Attribute, Expr, Field, Fields, GenericParam, Ident, Item, ItemEnum, ItemStruct, Meta,
-    MetaList, MetaNameValue, PathArguments, Token, Type, TypeParam, Variant, parse_macro_input,
+    parse_macro_input, Attribute, Expr, Field, Fields, GenericParam, Ident, Item, ItemEnum,
+    ItemStruct, Meta, MetaList, MetaNameValue, PathArguments, Token, Type, TypeParam, Variant,
 };
 
 /// The main macro of this crate. See the main page of the docs for an explanation of use, or check the examples.
