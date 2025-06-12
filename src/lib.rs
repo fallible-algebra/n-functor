@@ -279,7 +279,7 @@ impl AbstractFunctorFactory {
             .iter()
             .map(|a| TypeParam::from(a.1.clone()))
             .collect();
-        let map_res_error_ident = Ident::new("E_", Span::call_site());
+        let map_res_error_ident = factory.ident_for_error();
         let fn_args_for_map_res = factory.make_fn_arguments_map_res(map_res_error_ident.clone());
         let mut mapped_params_for_map_res = mapped_params.clone();
         mapped_params_for_map_res.push(map_res_error_ident.clone().into());
@@ -318,6 +318,26 @@ impl AbstractFunctorFactory {
                 #map_res_impl
             }
         }
+    }
+
+    // Provide a unique Error type parameter for the map_res method of this type.
+    fn ident_for_error(&self) -> Ident {
+        let mut candidate = Ident::new("E", Span::call_site());
+        let mut suffix: u32 = 0;
+        loop {
+            let mut changed_this_loop = false;
+            for (key, value) in self.type_maps_to_type.iter() {
+                if &candidate == key || &candidate == value {
+                    suffix += 1;
+                    candidate = Ident::new(&format!("E{suffix}"), Span::call_site());
+                    changed_this_loop = true;
+                }
+            }
+            if !changed_this_loop {
+                break;
+            }
+        }
+        candidate
     }
 
     fn implement_body_for_variant(&self, variant: &mut Variant, is_map_res: bool) -> TokenStream2 {
