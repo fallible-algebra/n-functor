@@ -2,14 +2,12 @@ use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{ToTokens, quote, quote_spanned};
 use std::collections::BTreeMap;
-use syn::parse::{self, Parser};
-use syn::punctuated::{self, Punctuated};
+use syn::parse::Parser;
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::token::{Comma, Pub};
 use syn::{
     Attribute, Expr, Field, Fields, GenericParam, Ident, Item, ItemEnum, ItemStruct, Meta,
-    MetaList, MetaNameValue, PathArguments, PathSegment, Token, Type, TypeParam, Variant,
-    Visibility, parse_macro_input,
+    MetaList, MetaNameValue, PathArguments, Token, Type, TypeParam, Variant, parse_macro_input,
 };
 
 /// Generate a `map` function for a given type that maps across all its type parameters.
