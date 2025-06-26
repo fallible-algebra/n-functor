@@ -63,22 +63,22 @@
 //! ### `#[map_with(..)]`
 //!
 //! The `map_with` attribute lets you set specific functions to call when performing functor maps on types that aren't just the "raw" types in the type parameter. For example, if you have a struct `MyData<A> {field: AnotherCratesType<A>}` you'll need to provide a mapping function for `AnotherCratesType<A>`, unless that type implements a self-consuming "map(self, f: Fn A -> B)" function already.
-//! 
+//!
 //! This would look like:
 //!
 //! ```
 //! use n_functor::derive_n_functor;
-//! 
+//!
 //! // pretend this is defined elsewhere.
 //! struct AnotherCratesType<A>(pub Option<A>);
-//! 
+//!
 //! #[derive_n_functor]
 //! struct MyData<A> {
 //!     #[map_with(|other_crate_type: AnotherCratesType<_>, f| AnotherCratesType(other_crate_type.0.map(f)))]
 //!     field: AnotherCratesType<A>
 //! }
 //! ```
-//! 
+//!
 //! `#[map_with(..)]` takes an expression, so it can be a closure or the name of a function in scope.
 //!
 //! ## Details and Limitations
@@ -95,14 +95,14 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{ToTokens, quote, quote_spanned};
 use std::collections::BTreeMap;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Attribute, Expr, Field, Fields, GenericParam, Ident, Item, ItemEnum,
-    ItemStruct, Meta, MetaList, MetaNameValue, PathArguments, Token, Type, TypeParam, Variant,
+    Attribute, Expr, Field, Fields, GenericParam, Ident, Item, ItemEnum, ItemStruct, Meta,
+    MetaList, MetaNameValue, PathArguments, Token, Type, TypeParam, Variant, parse_macro_input,
 };
 
 /// The main macro of this crate. See the main page of the docs for an explanation of use, or check the examples.
@@ -289,10 +289,7 @@ impl AbstractFunctorFactory {
             ..
         } = args;
         let map_name = factory.args.get_map_all_name();
-        let map_res_name = Ident::new(
-            &format!("{}_{}", map_name, map_res_suffix),
-            Span::call_site(),
-        );
+        let map_res_name = Ident::new(&format!("{map_name}_{map_res_suffix}"), Span::call_site());
         let (impl_gen, type_gen, where_clause) = source.generics.split_for_impl();
         let mapped_params: Punctuated<TypeParam, Token![,]> = factory
             .type_maps_to_type
@@ -395,18 +392,17 @@ impl AbstractFunctorFactory {
 
     /// The behaviour for this is such that the order of generics for the container type is followed best as possible.
     fn get_mappable_generics_of_type(&self, ty: &Type) -> Option<FieldMapping> {
-        if let Type::Path(path) = ty {
-            let last_segment = path.path.segments.last();
-            // unwraps here because segments' length is checked to be >0 right here.
-            if path.path.segments.len() == 1
-                && self
-                    .type_maps_to_type
-                    .iter()
-                    .any(|(generic, _)| *generic == last_segment.unwrap().ident)
-            {
-                // the type is a path with 1 segment whose identifier matches a type parameter, so it's a trivial case.
-                return Some(FieldMapping::Trivial(last_segment.unwrap().ident.clone()));
-            }
+        if let Type::Path(path) = ty
+            && let last_segment = path.path.segments.last()
+            && path.path.segments.len() == 1
+            && self
+                .type_maps_to_type
+                .iter()
+                // unwraps here because segments' length is checked to be >0 right here.
+                .any(|(generic, _)| *generic == last_segment.unwrap().ident)
+        {
+            // the type is a path with 1 segment whose identifier matches a type parameter, so it's a trivial case.
+            return Some(FieldMapping::Trivial(last_segment.unwrap().ident.clone()));
         }
         let mut buffer = Vec::new();
         self.recursive_get_generics_of_type_to_buffer(ty, &mut buffer);
